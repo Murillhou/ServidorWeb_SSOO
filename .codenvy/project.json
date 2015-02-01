@@ -1,0 +1,1 @@
+{"runners":{"configs":{"system:/cpp/simple":{"ram":0,"variables":{},"options":{}}},"default":"system:/cpp/simple"},"description":"Servidor Web desarrollado como prácticas durante clases de sistemas operativos. Útil para aprender acerca de creación y comunicación entre procesos en C.","type":"cpp","attributes":{}}
