@@ -1,0 +1,410 @@
+LABORATORIO DE SISTEMAS OPERATIVOS
+(Curso 2012/2013)
+PRÁCTICA 3
+Aplicación Multiproceso sobre HTTP
+1 Objetivos
+Se pretende que el alumno conozca los mecanismos que proporciona el sistema operativo Unix para desarrollar aplicaciones multiproceso, principalmente en lo que respecta a la creación y destrucción de procesos, y a su intercomunicación. También se estudiará el manejo de descriptores de E/S.
+2 Desarrollo
+La práctica está estructurada en cuatro etapas para facilitar su desarrollo (si bien la última de ellas es opcional). Cada una de ellas tiene una duración orientativa de una semana y, al finalizar cada etapa, el alumno deberá presentar a su profesor la documentación especificada en cada una de ellas. La duración total de esta práctica es de 4 semanas.
+La fecha tope para la entrega de los resultados de la última fase de la práctica será la semana del 19 al 23 de noviembre. Cada alumno deberá haberla entregado antes del inicio de su sesión de laboratorio. La entrega se realizará mediante la subida a moodle de un único fichero zip que contenga el código fuente desarrollado por el alumno y otros ficheros que se explican más adelante. El fichero subido deberá ajustarse a las especificaciones indicadas en la página de subida del fichero de moodle. De no respetar dichas especificaciones, el profesor podrá considerar no válida la entrega. En cada una de las fases que conforman la práctica, se configurarán tareas en moodle para que el alumno entregue los resultados parciales, debiendo hacerlo, como máximo, en la semana en la que se inicia la siguiente fase.
+Parte de la evaluación se realizará mediante la ejecución de una batería de pruebas que estará disponible en almanzor, para que el alumno pueda comprobar el funcionamiento de su aplicación.
+El desarrollo de la práctica es un trabajo individual. Para comprobar que no hay prácticas copiadas, se utilizará el programa de detección de plagio moss. Se aplicará la normativa sobre copia de prácticas a todas las prácticas en las que se detecte plagio.
+3 Enunciado
+Se va a desarrollar una aplicación multiproceso que podrá atender peticiones concurrentes a través del protocolo HTTP y sobre el sistema operativo FreeBSD. A este tipo de aplicaciones se las denomina servidores web. Para realizar esta práctica se le proporcionará, ya codificado, un módulo de funciones para procesar el protocolo HTTP y realizar las comunicaciones de red (ver apartado 3.1.5). Además, se proporcionará un módulo que servirá para procesar las opciones de ejecución del
+Laboratorio de Sistemas Operativos Curso 2012/2013
+Práctica 3 – página 2 -
+programa. Por último, se proporcionará un esqueleto de fichero Makefile, que será adaptado por el alumno, para facilitar la compilación y el enlazado de la aplicación.
+La práctica se dividirá en dos partes:
+• Una parte obligatoria para todos los alumnos y que abarca las funciones básicas del servidor web (ver apartado 3.2).
+• Una parte opcional que representa algunas mejoras sobre la parte obligatoria, a elegir dentro de un catálogo propuesto en esta práctica (ver apartado 3.3).
+Documentación a entregar: Se deberá entregar el programa codificado en lenguaje C, debidamente comentado y con un estilo de programación adecuado, así como cualquier otro fichero necesario para compilar y enlazar el programa, incluyendo el fichero Makefile. En la última entrega se deberá adjuntar un documento en el que se expliquen los detalles de diseño no especificados explícitamente en el enunciado de esta práctica, tanto de las funciones básicas como de las mejoras elegidas (parte opcional). Si la práctica tuviera algún error de funcionamiento conocido por el alumno, también deberá aclararlo en el documento.
+3.1 Descripción del servidor web multiproceso
+Para comprender mejor este apartado es interesante consultar el Apéndice A
+3.1.1 Gestión de los procesos en el servidor web multiproceso
+Un servidor web ha de poder atender simultáneamente muchas peticiones HTTP. Por cada documento HTML que pide un agente de usuario (navegador), se pueden desencadenar múltiples solicitudes de recursos adicionales (primero el propio documento HTML y después recursos tales como imágenes, hojas de estilos, recursos multimedia,…). Muchos agentes de usuario abren varias conexiones simultáneas con el servidor y piden en paralelo los recursos auxiliares para acelerar el proceso de descarga del documento. A cada uno de los procesos encargados de gestionar una conexión en el lado del agente de usuario, se le denomina proceso cliente.
+Cada petición individual lleva un cierto tiempo de servicio, que no es despreciable. Por ejemplo, el servidor ha de procesar la petición para saber qué se le está pidiendo, ha de abrir y leer el documento pedido o bien generarlo dinámicamente, y ha de transmitirlo al cliente. Si se trata de un recurso dinámico, ha de ejecutar el programa que lo genera. Todas esas operaciones pueden llevar acarreadas esperas de E/S y un cierto consumo de tiempo de CPU. Por tanto, si se desea que un servidor web atienda con diligencia a múltiples agentes de usuario a la vez, es necesario utilizar las capacidades de multiproceso o multihilo del sistema operativo para procesar concurrentemente tantas peticiones como sea posible. Aquí es donde la utilización de múltiples procesos va a venir muy bien para el desarrollo del servidor web. Otra posibilidad sería utilizar múltiples hilos.
+Existen muchas formas de implementar un servidor web multiproceso. En este apartado se presentará una posible implementación partiendo de un diseño básico para que, en sucesivos refinamientos, se llegue a la solución final. En general, todas las implementaciones suponen la existencia de un proceso maestro que realiza tareas de vigilancia del estado general del servidor, y una serie de procesos auxiliares que son los que atienden a los clientes y les sirven las peticiones. En adelante se denominará procesos trabajadores a los de esta segunda categoría.
+La manera más elemental de gestionar los procesos trabajadores consiste en que, para cada cliente que se conecte al servidor, el proceso maestro cree un proceso trabajador nuevo y le pase la conexión en cuestión. Cuando se cierre la conexión, el proceso trabajador terminará su ejecución. El inconveniente de esta técnica es que la creación y la destrucción de los procesos es una operación
+Laboratorio de Sistemas Operativos Curso 2012/2013
+Práctica 3 – página 3 -
+relativamente costosa e introduce una sobrecarga en la atención a los clientes, ya que siempre hay que esperar a que se cree un proceso trabajador antes de poder empezar a atender peticiones de un cliente.
+Una posible mejora consistiría en crear, al comienzo de la ejecución del servidor web, un cierto número fijo de procesos trabajadores, que inicialmente estarían inactivos. Cuando llegue una petición de conexión de un cliente, se le asignará a uno de los procesos trabajadores inactivos, que se encargará de atender sus peticiones. Cuando se cierre la conexión con el cliente (porque el cliente decida cerrarla, porque se produzca un error, etc.), el proceso trabajador podrá finalizar también su ejecución y crearse otro proceso nuevo para sustituirlo, o bien el proceso trabajador podrá volver al estado inactivo y reutilizarse para procesar conexiones futuras. En este caso, la sobrecarga es mucho menor, ya que no hay que esperar a que se cree un proceso nuevo para las conexiones que llegan. Ahora bien, puede darse el caso de que todos los procesos trabajadores estén ocupados cuando llega una conexión nueva, lo cual demoraría la atención de dicha conexión hasta que alguno de los procesos trabajadores quede libre.
+Un refinamiento de la técnica anterior consistiría en crear inicialmente un cierto número de procesos trabajadores, pero con la posibilidad de crear más procesos, si en un momento dado todos están ocupados y llegan más peticiones de conexiones de clientes. Al igual que en el caso anterior, los procesos que terminen con sus conexiones pasarán nuevamente al estado inactivo a la espera de que haya trabajo para ellos.
+Un inconveniente de usar el método anterior es que, si durante un cierto intervalo de tiempo se produce un pico de conexiones, es probable que el servidor web cree muchos procesos trabajadores. Cuando el pico haya sido atendido, quedará un gran número de procesos trabajadores inactivos consumiendo recursos del sistema. La solución a este problema consiste en hacer que el proceso maestro, si ve que hay demasiados procesos trabajadores inactivos, dé orden a algunos de ellos para que finalicen.
+Resumiendo todo lo anterior, el servidor web a desarrollar debe cumplir los siguientes requisitos respecto a la gestión del servicio:
+• El servidor constará de un proceso maestro y un número variable de procesos trabajadores.
+• El proceso maestro vigilará periódicamente el estado de los procesos trabajadores y creará o destruirá procesos trabajadores según sea necesario.
+• Los procesos trabajadores estarán en un bucle en el que esperarán a que se conecte un cliente y entonces atenderán todas sus peticiones hasta la desconexión del cliente. No atenderán a más clientes hasta que se desconecte el cliente actual.
+• Inicialmente, el proceso maestro creará un número Pini de procesos trabajadores.
+• Si el proceso maestro detecta que hay menos de Pinact_min procesos trabajadores inactivos, entonces creará procesos trabajadores adicionales, salvo que ya existan Pmax procesos trabajadores.
+• Si el servidor detecta que han quedado más de Pinact_max procesos trabajadores inactivos, ordenará la terminación de varios de esos procesos inactivos, hasta alcanzar el tope de Pinact_max procesos trabajadores inactivos.
+• Para finalizar la ejecución del servidor web, el proceso maestro dará la orden a todos los procesos trabajadores para que, cuando terminen de atender la petición en curso, finalicen su ejecución.
+Laboratorio de Sistemas Operativos Curso 2012/2013
+Práctica 3 – página 4 -
+Nota: La gestión de procesos que se pide en esta práctica está basada en la que utilizan servidores web reales como Apache.
+3.1.2 Comunicación entre los procesos del servidor web
+En la aplicación a desarrollar existen tres casos fundamentales en los que los diferentes procesos que la componen han de comunicarse:
+• Los procesos trabajadores han de indicar su estado (activo o inactivo) al proceso maestro, de forma que éste pueda determinar si es necesario crear nuevos procesos trabajadores, o eliminar un exceso de procesos trabajadores inactivos. En Unix, y en el caso particular de FreeBSD, existen diferentes mecanismos de comunicación entre procesos, pero en la implementación del servidor web de esta práctica, deberá utilizarse memoria compartida. Para ello, al iniciarse el servidor web, debe crear, mediante mmap(2), una zona de memoria que será compartida por todos los procesos del servidor web. En ella se almacenará una tabla de tamaño Pmax con una entrada para cada posible proceso, que indique, además de otros campos, el estado del proceso (activo, inactivo, entrada no usada). Si el alumno quiere usar otro mecanismo de comunicación entre procesos debe comentarlo previamente con su profesor.
+• A veces, el proceso maestro ha de ordenar a los procesos trabajadores inactivos que terminen su ejecución, por ejemplo cuando hay exceso de procesos inactivos o cuando se desea finalizar la ejecución del servidor web. Para este caso se propone que el proceso maestro envíe una señal de terminación (SIGTERM) a los procesos escogidos para su eliminación, y que éstos la capturen y finalicen ordenadamente. Si el proceso trabajador que recibe la señal está atendiendo a un cliente, terminará tras procesar la petición actual.
+• Para finalizar de forma ordenada, el proceso maestro debe gestionar la captura de las señales SIGTERM y SIGINT, de forma que, cuando reciba cualquiera de ellas, dé orden a todos los procesos trabajadores para que terminen su ejecución al finalizar el procesamiento de la petición en curso, cerrando adecuadamente las comunicaciones con los clientes.
+• Un proceso trabajador que crea un proceso hijo para ejecutar un CGI (Common Gateway Interface) ha de pasar al CGI información sobre la invocación y recibir de éste su resultado, tal como se explica en el apartado 3.1.4. En este caso, se propone utilizar tuberías y duplicar sobre ellas los descriptores STDIN_FILENO (entrada estándar) y STDOUT_FILENO (salida estándar) del proceso CGI, además de definir las variables de entorno necesarias.
+3.1.3 Parámetros del servidor web
+El servidor web a implementar necesita conocer algunos parámetros básicos para su correcto funcionamiento, en concreto:
+• Puerto TCP de escucha (opción –p[ort]). Cada alumno tiene que hacer que su servidor escuche las peticiones de los clientes en un puerto TCP diferente, a fin de no interferir con los servidores de otros alumnos. El profesor asignará puertos diferentes a cada alumno.
+• Directorio base (opción –b[ase]) a partir del cual se ubican los recursos que gestiona el servidor. Por ejemplo, ~/ssoo/practica3/paginas.
+• Valores relacionados con el control del número de procesos trabajadores: Pini (opción –Pini o –I), Pmax (opción –Pmax o -M), Pinact_min (opción –Imin o -n), y Pinact_max (opción –Imax o -m), comentados anteriormente.
+Laboratorio de Sistemas Operativos Curso 2012/2013
+Práctica 3 – página 5 -
+• Ayuda (opción –h[elp]). Muestra una ayuda acerca del uso del programa, describiendo brevemente las opciones disponibles, y ejemplos de uso.
+• Información de depuración (opción –[debu]g). Permite elegir entre mostrar información de depuración, o no hacerlo. En el caso de usar este parámetro se puede indicar el nivel de depuración, mediante un valor numérico para elegir el nivel de detalle, siendo 1 el nivel de depuración por defecto. Esta opción le permitirá comprobar a su elección el funcionamiento del programa, o eliminar todos los mensajes una vez que el programa ha sido depurado completamente
+Los parámetros del servidor web se especificarán como argumentos de la línea de mandatos. No se admite que los valores estén incrustados en el código ni que sean constantes de compilación. Para facilitar el desarrollo del servidor web, se proporciona un módulo para la gestión de los parámetros básicos de configuración del servidor.
+3.1.4 Ejecución de programas CGI
+CGI (Common Gateway Interface) es una interfaz estandarizada que se utiliza para que un servidor web invoque a un programa externo con el propósito generar un recurso web (documento HTML, imagen, PDF,….) dinámicamente. Puede encontrar información más completa sobre esta interfaz en http://www.w3.org/CGI/. De manera simplificada y adaptada a las necesidades de esta práctica, la interfaz CGI consiste en lo siguiente:
+• El programa CGI ha de recibir por su entrada estándar el cuerpo asociado a la petición, si no es nulo (campo cuerpo de la estructura de petición descrita en el apartado 3.1.5).
+• El servidor web ha de recoger la salida estándar del programa CGI y enviarla tal cual al cliente.
+• El servidor web ha de proporcionar al programa CGI ciertos valores de contexto mediante variables de entorno. En esta práctica han de definirse las siguientes variables de entorno:
+SERVER_NAME: nombre de la máquina donde se ejecuta el servidor. Se puede obtener mediante la función gethostname(3).
+GATEWAY_INTERFACE: siempre tendrá el valor "CGI/1.1".
+SERVER_PROTOCOL: siempre tendrá el valor "HTTP/1.1".
+SERVER_PORT: su valor es el número del puerto TCP en el que escucha el servidor web (en el que acepta conexiones).
+REQUEST_METHOD: valdrá "GET" o "POST", dependiendo del método utilizado en esta petición (campo metodo de la estructura de petición).
+SCRIPT_FILENAME: contendrá el nombre del programa CGI invocado (campo fichero de la estructura de petición).
+QUERY_STRING: contiene todo lo que va detrás del primer carácter ? de la URL, si es que hay algo (campo argumentos de la estructura de petición). En caso contrario, esta variable de entorno no debe estar definida.
+REMOTE_ADDR: dirección IP del cliente (campo ip_cliente de la estructura de petición).
+CONTENT_TYPE: valor del campo content_type de la estructura de petición, siempre que no sea nulo. En caso contrario, esta variable de entorno no debe estar definida.
+Laboratorio de Sistemas Operativos Curso 2012/2013
+Práctica 3 – página 6 -
+CONTENT_LENGTH: longitud del cuerpo asociado a la petición, siempre que no sea 0 (campo long_cuerpo de la estructura de petición). En caso contrario, esta variable de entorno no debe estar definida.
+Cuando el servidor web invoca al programa CGI, se crea un nuevo proceso que es el que ejecuta el programa CGI. Puesto que crear un nuevo proceso es una operación costosa (en tiempo y recursos), la utilización de programas CGI puede ser en algunos casos inviable cuando el servidor tiene muchas peticiones de CGI. Por esta razón y otras, como la facilidad de programación, es por la que se han desarrollado tecnologías de generación dinámica de documentos como PHP, JSP, ASP, .NET, JAVA,… que no necesitan usar programas CGI externos para crear documentos dinámicos.
+3.1.5 API para la comunicación con los clientes web
+Con el fin de aislar al alumno de la problemática de la comunicación con los clientes, se dispondrá de una serie de funciones ya codificadas y que se entregan en un fichero objeto denominado http.o. El alumno deberá enlazarlo con el fichero (o ficheros) que conformen su aplicación, para producir el ejecutable que implementará el servidor web objetivo de esta práctica.
+La información completa de las funciones de este módulo se encuentra en el fichero http.h (disponible en la unidad L: desde Windows o en el directorio /windows/laboratorio/ssoo/practica3 desde una sesión en almanzor). Seguidamente se describen brevemente estas funciones:
+• http_crear: Devuelve una referencia a un gestor de conexiones HTTP (GestorHTTP) asociado al puerto TCP que recibe como argumento. Se habilita un puerto TCP para recibir por él peticiones de conexión provenientes de los procesos cliente.
+• http_obtener_descriptor_escucha: Obtiene el descriptor del puerto TCP asociado a un GestorHTTP. Esta función se necesitará para alguna de las mejoras del apartado 3.3.
+• http_esperar_conexion: Acepta una solicitud de conexión realizada por un cliente. Esta función espera a que se conecte un cliente y, cuando esto sucede, devuelve (parámetro resultado pasado por referencia) una referencia a una ConexionHTTP (esta estructura de datos es la que permite al proceso trabajador comunicarse con el cliente).
+• http_obtener_ip_cliente: Obtiene la dirección IP del cliente. Dada una referencia a una ConexionHTTP, devuelve una cadena de caracteres con la dirección IP del cliente asociado.
+• http_obtener_descriptor_conexion: Obtiene el descriptor de la conexión con el cliente. Devuelve el descriptor usado para enviar datos al cliente, y que está asociado a la ConexionHTTP. Es probable que esta función no se necesite para esta práctica.
+• http_leer_peticion: Lee una solicitud de petición realizada por un cliente. Dada una ConexionHTTP usada para comunicarse con un cliente, lee tanto como pueda de la misma y, si tiene suficientes datos, genera y devuelve (parámetro resultado pasado por referencia) una referencia a una estructura Peticion. Tiene dos modos de funcionamiento seleccionables mediante el parámetro de tipo lógico bloqueante. En modo bloqueante, espera hasta recibir una petición completa. En modo no bloqueante, si no dispone de una petición completa en ese momento, retorna con la indicación HTTP_SEGUIR_ESPERANDO. En principio, para esta práctica siempre se usará el modo bloqueante, salvo que se aborden ciertas mejoras del apartado 3.3.
+Laboratorio de Sistemas Operativos Curso 2012/2013
+Práctica 3 – página 7 -
+• http_destruir_peticion: Destruye la petición. Libera la memoria usada por la estructura de datos asociada a una Peticion.
+• http_enviar_respuesta: Envía la respuesta al cliente. Dada una ConexionHTTP y el descriptor de un fichero (o tubería) abierto para lectura, envía al cliente todo lo que lea a través de dicho descriptor. El parámetro es_fichero se usa para indicar si el descriptor está asociado a un fichero o no. Al enviar la respuesta de un CGI, este parámetro deberá ser 0 (ya que el descriptor pasado será una tubería).
+• http_enviar_codigo: Envía un código de error al cliente. Dada una ConexionHTTP, un código de error y un mensaje explicativo (descritos en el Apéndice B), envía una respuesta de error al cliente.
+• http_enviar_html: Envía datos HTML. Dada una ConexionHTTP y una cadena de texto HTML, la envía al cliente. Se puede utilizar para implementar la mejora 3.3.4.
+• http_cerrar_conexion: Cierra una conexión. Cierra la conexión con el cliente y libera la memoria ocupada por la ConexionHTTP.
+• http_destruir: Destruye el GestorHTTP. Finaliza la escucha en el puerto asociado y libera la memoria ocupada por el GestorHTTP.
+La estructura Peticion usada en las anteriores funciones contiene la siguiente información:
+• Dirección IP del cliente (campo ip_cliente).
+• Recurso solicitado (fichero, directorio o CGI) extraído de la URL que solicita el cliente (campo fichero).
+• Otros campos que se utilizarán para proporcionárselos al CGI en caso de haberse solicitado un recurso de este tipo (campos argumentos, content_type, cuerpo y long_cuerpo).
+• Otros campos de uso interno por parte del módulo de comunicaciones (http).
+En la unidad L: (o desde una sesión de Almanzor en /windows/laboratorio/ssoo/practica3) encontrará en fichero C de ejemplo de uso de estas funciones.
+3.2 Funciones básicas obligatorias
+El alumno ha de desarrollar un servidor web que realice, al menos, las siguientes funciones básicas:
+• Recoger y procesar los parámetros de invocación del programa servidor web, descritos en el apartado 3.1.3.
+• Responder adecuadamente a las peticiones de documentos estáticos que realicen los clientes.
+• Realizar la gestión de los procesos trabajadores, tal y como se describe en el apartado 3.1.1.
+• Ejecutar programas externos CGI, tal y como se describe en el apartado 3.1.4
+Opcionalmente, implementará las mejoras propuestas en el apartado 3.3.
+Laboratorio de Sistemas Operativos Curso 2012/2013
+Práctica 3 – página 8 -
+3.3 Mejoras
+En este apartado se proponen una serie de mejoras que se pueden hacer sobre las funciones básicas del servidor web. Se valorará positivamente la implementación de las mejoras. Se recomienda que el alumno explique a su profesor previamente qué mejoras ha escogido y cuál es su planteamiento para realizarlas.
+Las mejoras propuestas son:
+3.3.1 Límite en el tiempo de ejecución de los programas CGI
+Si el servidor web lanza un programa CGI y éste se mete en un bucle sin fin, un interbloqueo, una espera indefinida, o cualquier otra situación similar, esto puede afectar negativamente al servidor, ya que el proceso hijo trabajador que está esperando a que termine el CGI para devolver la respuesta al cliente también se quedará bloqueado indefinidamente y sin posibilidad de atender a otras peticiones.
+Para proteger al servidor web de esta eventualidad, se puede hacer que la espera a que termine el programa CGI, por parte del proceso trabajador, esté acotada a un intervalo que se suponga que es suficiente para la ejecución de cualquier programa CGI correcto, por ejemplo 60 segundos. Si se supera ese límite, el proceso trabajador finaliza el programa CGI y devuelve una respuesta de error al cliente (un código de error).
+3.3.2 Documento por defecto en un directorio
+Algunas URL no especifican el recurso que hay que descargar, sino sólo un nombre de directorio. En condiciones normales esto produciría un error, ya que no se puede devolver un directorio. Ahora bien, en estos casos, muchos servidores web buscan ciertos ficheros con nombres predeterminados en el directorio especificado y, si existen, devuelven el contenido de dichos ficheros. Los nombres de fichero predeterminado más habituales son index.html, index.htm o default.htm. En el caso de no existir estos ficheros predeterminados, podría devolver un documento HTML que contenga un listado de todos los ficheros y directorios que se encuentran en el directorio solicitado, con enlaces en sus nombres para poder descargar los recursos o explorar los directorios.
+La mejora que se pide para esta práctica es únicamente la de devolver el fichero por defecto, si existe, cuando una URL no hace referencia a un recurso, sino a un directorio.
+3.3.3 Inactividad de un cliente
+Si un cliente se conecta al servidor web y deja de enviar o recibir datos, pero sin cerrar la conexión, el proceso trabajador que lo atiende se queda bloqueado y no atiende a ningún otro cliente. Se puede establecer un límite de tiempo de inactividad en el cliente, pasado el cual se cierra la conexión y el proceso trabajador se pone nuevamente a la espera de conexión de otros clientes.
+3.3.4 Estadísticas del servidor
+Algunos servidores web interpretan ciertas URL como órdenes para el propio servidor. Un ejemplo es una URL como /estadisticas, que puede servir para que el servidor web genere un documento HTML con información estadística sobre el servidor. Algunos de los datos que puede proporcionar son: tiempo que lleva en marcha el servidor, tiempo de CPU consumido por todos los procesos del servidor web, memoria virtual utilizada actualmente por todos los procesos del servidor web, número de clientes y de peticiones atendidas, número de peticiones erróneas detectadas, etc. El servidor debe responder a una URL de este tipo generando un documento HTML con datos estadísticos y enviándoselo al cliente.
+Laboratorio de Sistemas Operativos Curso 2012/2013
+Práctica 3 – página 9 -
+3.3.5 Tratamiento de clientes abusivos
+Un mismo cliente puede abrir múltiples conexiones simultáneas con un servidor web. En ocasiones puede interesar que se limite la cantidad de conexiones simultáneas por cliente, para evitar que un solo cliente monopolice el servidor. Para esta mejora se propone que el servidor web tenga dos umbrales de conexiones simultáneas desde un mismo cliente. Si se alcanza el primer umbral, las conexiones posteriores se atienden, pero el proceso que las atiende reduce su prioridad. Si se alcanza el segundo umbral, no se atienden más conexiones del mismo cliente y se cierran sin más.
+3.3.6 Mejora a propuesta del alumno
+El alumno puede proponer cualquier otra mejora que desee, siempre que guarde relación con los objetivos principales de la práctica. En este caso obligatoriamente ha de discutirla previamente con el profesor y obtener su visto bueno.
+3.4 Pruebas del servidor Web
+A continuación se comentan algunas de las pruebas que los alumnos pueden realizar para comprobar el funcionamiento de su servidor web. No obstante, se recuerda que las pruebas pueden servir para poner de manifiesto errores, pero nunca para demostrar la corrección del programa. Es fundamental hacer un diseño meditado y una codificación cuidadosa para lograr un programa que funcione correctamente.
+3.4.1 Acceso desde un navegador web en el laboratorio
+La prueba más evidente consiste en acceder al servidor web desarrollado por el alumno usando un navegador web normal y corriente, como pueda ser Firefox, Google Chrome, Internet Explorer, etc. En el caso concreto del entorno de laboratorio, será necesario especificar una URL de la forma: http://almanzor:PUERTO/RECURSO donde PUERTO es el puerto de escucha TCP asignado al alumno por el profesor y RECURSO es el recurso que se desea visualizar o descargar.
+Para facilitar la realización de pruebas de este tipo, se ha preparado un conjunto de recursos web y programas CGI de ejemplo que pueden ser utilizadas directamente por los alumnos. Estos recursos se encuentran disponibles en el directorio /windows/laboratorio/ssoo/practica3/Pruebas de almanzor. También se puede usar el manual en línea de FreeBSD en formato HTML (que está disponible en el directorio /usr/share/doc/handbook de almanzor o de la máquina virtual FreeBSD del alumno). Para acceder fácilmente a estos dos directorios desde su servidor web y no necesitar copiar su contenido, el alumno puede crear enlaces simbólicos a ellos desde un subdirectorio, de su directorio personal, llamado ssoo/practica3/Pruebas, usando los siguientes mandatos:
+cd ~/ssoo/practica3/Pruebas
+ln –s /windows/laboratorio/ssoo/practica3/Pruebas/paginas .
+ln –s /usr/share/doc/handbook .
+Puede comprobar, mediante el mandato ls –l, que se han creado, en el directorio ~/ssoo/practica3/Pruebas, dos nuevos enlaces simbólicos llamados paginas y handbook.
+Para probar los documentos de handbook, arranque su servidor web usando el siguiente mandato:
+./servidor_web -p PUERTO -b ~/ssoo/practica3/Pruebas/handbook
+Laboratorio de Sistemas Operativos Curso 2012/2013
+Práctica 3 – página 10 -
+Y para visualizar los documentos desde un navegador, use esta URL:
+http://almanzor:PUERTO/index.html
+Siendo PUERTO el nº de puerto que le han asignado para hacer esta práctica.
+Ilustración 1.- Recurso index.html al montar el sitio web ~/ssoo/practica3/Pruebas/handbook
+Para probar los documentos que están en paginas arranque su servidor web usando el siguiente mandato:
+./servidor_web -p PUERTO -b ~/ssoo/practica3/Pruebas/paginas
+Y para visualizar los documentos desde un navegador, use esta URL:
+http://almanzor:PUERTO/index.html
+Laboratorio de Sistemas Operativos Curso 2012/2013
+Práctica 3 – página 11 -
+Ilustración 2.- Recurso index.html al montar el sitio web ~/ssoo/practica3/Pruebas/paginas
+3.4.2 Acceso desde un navegador web fuera del laboratorio
+Para trabajar fuera del laboratorio, se recomienda utilizar la máquina virtual FreeBSD que el alumno instaló en la primera práctica. En tal caso, podría realizar pruebas análogas a las del apartado anterior, pero utilizando URL del tipo http://IP_DE_LA_MAQUINA:PUERTO/RECURSO.
+No obstante, si desea visualizar los documentos HTML que sirve su servidor web de almanzor, pero accediendo desde un navegador que se ejecute en un ordenador fuera del laboratorio, se encontrará con el problema de que el cortafuegos de acceso a la red del laboratorio no le permite conectarse a puertos no estándar de almanzor, como los usados en esta práctica.
+Para solventar esta situación puede abrir un túnel SSH entre su ordenador y el servidor web que ejecuta en almanzor. La idea básica del túnel es que el navegador de su casa accederá a un puerto local de su ordenador, en el cual escuchará el cliente de SSH que implementa el programa Putty. Putty transmitirá los datos a través de la sesión SSH hacia almanzor, entregándolos en el puerto de almanzor que se le haya indicado (donde está escuchando el servidor web). Las respuestas del servidor web circularán en sentido inverso a través del túnel. Como los datos circulan a través de una sesión SSH ya establecida, el cortafuegos no los interceptará.
+A continuación se indica cómo abrir un túnel SSH con Putty para probar el servidor web desde un ordenador que está fuera de la red del laboratorio:
+1. Abra una sesión de SSH hacia alumnos-lab.diatel.upm.es.
+2. Pinche en la esquina superior izquierda de la ventana del Putty para obtener el menú de opciones y seleccione Change Settings… -> Connection -> SSH -> Tunnels.
+3. En el cuadro de diálogo que aparece, rellene los siguientes datos: Source port -> PUERTO1, Destination -> almanzor:PUERTO2. Después pulse el botón Add y luego el botón Apply.
+Laboratorio de Sistemas Operativos Curso 2012/2013
+Práctica 3 – página 12 -
+PUERTO1 es el número de puerto que desea utilizar en su ordenador para acceder al servidor web y PUERTO2 es el número de puerto en el que está a la escucha el servidor web de almanzor. Se recomienda que ambos valores coincidan para evitar confusiones. La siguiente figura ilustra cómo podría quedar el cuadro de diálogo en cuestión.
+Ilustración 3: ejemplo de túnel SSH
+4. A partir de este momento podrá acceder desde el navegador web de su ordenador que está fuera de la red del laboratorio al servidor web que se ejecuta en almanzor abriendo la URL http://localhost:PUERTO1.
+NOTAS:
+• La sesión Putty en la que se ha abierto el túnel se puede utilizar con normalidad para ejecutar mandatos. El túnel se mantendrá abierto mientras esté abierta dicha sesión.
+• Puede reiniciar el servidor web todas las veces que haga falta, pero siempre deberá especificarse que escuche en el puerto PUERTO2.
+• Si lo desea, puede abrir más de un túnel utilizando distintos puertos en cada caso. Todos los túneles adicionales se pueden abrir en la misma sesión Putty que utilizó para el primer túnel.
+3.4.3 Utilización del navegador en modo texto lynx
+El programa lynx ofrece una implementación de cliente web en modo texto que le permitirá conectarse a un servidor web, visualizar el texto de los documentos HTML medianamente formateados y navegar por los enlaces. En vez de mostrar imágenes visualiza el nombre del fichero de la imagen.
+Este programa le puede ser muy útil para verificar el funcionamiento de su servidor web sin necesidad de usar un navegador en modo gráfico como IE o Mozilla. Esta necesidad surge si desea ejecutar su servidor web desde almanzor (mediante una conexión previamente establecida por ssh) y quiere probarlo desde un ordenador que está fuera de la red de la escuela, pero por algún motivo no puede utilizar el método del túnel SSH descrito en el apartado anterior. Usando lynx en el propio
+Laboratorio de Sistemas Operativos Curso 2012/2013
+Práctica 3 – página 13 -
+almanzor, y desde una sesión ssh (establecida por ejemplo con Putty), puede arrancar el servidor y navegar por sus documentos HTML desde la misma sesión.
+Para ejecutar lynx basta con invocarlo (desde una sesión en almanzor) mediante el siguiente mandato:
+lynx http://almanzor:PUERTO/index.html
+3.4.4 Utilización del programa de descarga de recursos wget
+El programa wget permite descargar recursos web y guardarlos en ficheros. Se usa con frecuencia para obtener copias locales de documentos HTML y para automatizar accesos a aplicaciones web.
+Es otra posibilidad más para realizar pruebas con el servidor web de esta práctica, ya que permite descargar recursos individuales, mientras que un navegador intentará descargar también posibles referencias dentro de documento HTML, como imágenes, etc. Además, proporciona alguna información un poco más detallada sobre el resultado de la operación.
+Para ejecutar wget basta con invocarlo (desde una sesión en almanzor) mediante un mandato similar al siguiente:
+wget –O fichero_destino http://almanzor:PUERTO/recurso
+En el mandato anterior fichero_destino sería el fichero donde se quiere guardar el recurso descargado. Si no se quiere ese recurso para nada puede especificarse /dev/null para descartarlo. El programa wget tiene muchas opciones que permiten hacer multitud de pruebas con un servidor web, por lo que se recomienda al alumno que consulte su página de manual.
+Si desea utilizar wget en su propia máquina virtual es posible que primero tenga que instalarlo mediante pkg_add –r wget. Para más información sobre la instalación de paquetes de software en FreeBSD, consulte el moodle de la asignatura.
+3.4.5 Pruebas de carga
+Las pruebas interactivas con un navegador web no van a producir suficiente carga de trabajo al servidor web como para comprobar su respuesta frente a una alta intensidad de peticiones. Para generar una mayor carga de trabajo ha de utilizarse un programa especial, como puede ser http_load, el cual se encuentra instalado en el ordenador almanzor donde los alumnos hacen sus prácticas. Este programa también se puede descargar e instalar en su máquina virtual FreeBSD mediante pkg_add –r http_load.
+El programa http_load es capaz de generar una carga arbitraria de peticiones HTTP a un servidor web. El alumno puede consultar su página de manual para obtener más detalles, pero en esencia se le puede indicar a http_load que haga peticiones a una cierta tasa de peticiones/segundo o también que mantenga un ritmo sostenido de una cierta cantidad de peticiones en paralelo. Las peticiones que hace http_load se escogen aleatoriamente de entre las URL contenidas en un fichero.
+Una forma rápida de generar un fichero con todas las URL de los documentos estáticos de prueba contenidos en el manual de FreeBSD es la siguiente:
+cd directorio_base_documentos_web_del_alumno
+find –H handbook –type f –print | awk '{ print "http://almanzor:PUERTO/" $0 }' > lista-urls.txt
+A continuación se podría usar http_load de alguna de las dos maneras siguientes:
+http_load –checksum –rate 15 –seconds 10 lista-urls.txt
+Laboratorio de Sistemas Operativos Curso 2012/2013
+Práctica 3 – página 14 -
+http_load –checksum –parallel 15 –seconds 10 lista-urls.txt
+La primera orden especifica una carga de 15 peticiones/segundo durante un total de 10 segundos. La segunda orden especifica que se mantenga una carga de 15 peticiones en paralelo durante un total de 10 segundos.
+3.4.6 Programa servidor web de prueba
+En /windows/laboratorio/ssoo/practica3 encontrará la implementación de un servidor web, similar al que se le pide en esta práctica, que puede usar para hacerse una idea de las funcionalidades que debe soportar su servidor.
+Estando en almanzor en el directorio /windows/laboratorio/ssoo/practica3, la ejecución del servidor web se realizaría ejecutando:
+./servidor_web -p PUERTO -b Pruebas/paginas
+(siendo PUERTO el nº de puerto en el que el programa aceptará conexiones de los clientes)
+Para visualizar los documentos, se usará la URL http://almanzor:PUERTO/index.html
+3.4.7 Programa verificador del servidor web
+En /windows/laboratorio/ssoo/practica3 encontrará un programa llamado verificador, que .realiza una amplia batería de pruebas sobre el servidor web indicado. Esto le resultará de mucha ayuda para detectar posibles fallos o deficiencias de implementación en su servidor web. Además, parte de la evaluación del servidor web se realizará pasando al servidor web entregado una batería de pruebas muy similar.
+Para saber cómo utilizar el programa verificador, ejecútelo sin más y siga las indicaciones mostradas en pantalla. Puede usar este programa tanto en almanzor como en su máquina virtual.
+4 Fases de realización de la práctica
+Se recomienda al alumno ser constante en la realización de esta práctica y reparta el trabajo adecuadamente. Para ello, se propone una separación de la práctica en fases, a título orientativo.
+Si el alumno diseña y estructura adecuadamente su programa, el paso de una fase a la siguiente apenas requerirá modificaciones en lo ya completado, y únicamente habrá que añadir más funcionalidades. Se recomienda consultar los sucesivos diseños con el profesor de laboratorio.
+4.1 Fase 1. Duración 1 semana
+Durante la primera semana, el alumno debe desarrollar un servidor web monoproceso que solamente sea capaz de servir ficheros estáticos. Esto le servirá para tomar contacto con la práctica y para asegurarse de que sabe manejar adecuadamente la API de comunicaciones HTTP con los clientes. Evidentemente, este servidor no será capaz de atender más que una conexión simultánea.
+Además, debe realizar el procesamiento completo de los parámetros de configuración del servidor, e incluir la gestión de las señales SIGTERM y SIGINT para poder terminar ordenadamente la ejecución del servidor web.
+A continuación se muestra un seudocódigo orientativo para la resolución de esta fase:
+Laboratorio de Sistemas Operativos Curso 2012/2013
+Práctica 3 – página 15 -
+Procesar los parámetros de configuración
+Establecer las rutinas de tratamiento de las señales
+Crear gestorHTTP ( in puerto ) -> GestorHTTP
+Repetir
+Esperar conexión de cliente ( in gestorHTTP, out cliente )
+Leer petición ( in cliente, out petición )
+Procesar documento estático ( in cliente, in petición )
+Destruir petición ( in petición )
+Cerrar conexión ( in cliente )
+Hasta final de programa
+Destruir gestorHTTP ( in GestorHTTP )
+Procesar documento estático ( in cliente, in petición ):
+fich = Abrir fichero ( in petición->fichero )
+Si fich == -1 /* Error al abrir el fichero */
+Enviar código de error ( in cliente, in 401|402|403… )
+Si no
+Enviar respuesta ( in cliente, in petición, in fich )
+Cerrar fichero ( in fich )
+Fin si
+El seudocódigo anterior cierra la conexión con el cliente tras servir una sola petición. Esto no es muy eficiente, ya que obliga a abrir una conexión nueva por cada recurso que haya que descargar y muchos documentos pueden desencadenar la solicitud de decenas o incluso cientos de recursos adicionales. No obstante, será suficiente para esta primera fase puesto que, al tratarse por el momento de un servidor monoproceso, es incapaz de manejar varias conexiones en paralelo. Hay que tener en cuenta que algunos agentes de usuario abren varias conexiones simultáneas para descargar en paralelo los recursos de un solo documento. Si el servidor sólo es capaz de manejar una conexión en cada momento, esos agentes de usuario no son capaces de descargar completamente los documentos. En el momento que se pase al servidor multiproceso, se modificará el seudocódigo para procesar más de una petición en cada conexión.
+Obsérvese que, por simplicidad, ni en el seudocódigo propuesto para esta fase ni en los de las demás fases se explicita en profundidad el tratamiento de los diversos errores y situaciones excepcionales que pueden producirse durante la ejecución del programa. No obstante, en su programa, el alumno debe detectar y tratar adecuadamente todos esos errores y situaciones excepcionales.
+En este seudocódigo, el proceso permanece en un bucle hasta final de programa. Ese final de programa se producirá cuando el proceso reciba la señal SIGTERM o la señal SIGINT. El manejador asociado a estas señales deberá modificar la variable de control de dicho bucle. Tenga en cuenta que, si se recibe una señal mientras las funciones http_esperar_conexion() o http_leer_peticion() están bloqueadas a la espera de recibir una conexión o una petición, estas funciones retornarán automáticamente con el código de error HTTP_ESPERA_INTERRUMPIDA. Obviamente, en este caso no habrá cliente que atender ni petición que procesar.
+Para probar esta fase se recomienda que el alumno pruebe en solicitar el recurso basica.html del directorio páginas.
+Laboratorio de Sistemas Operativos Curso 2012/2013
+Práctica 3 – página 16 -
+Ilustración 4.- Recurso index.html al montar el sitio web ~/ssoo/practica3/Pruebas/paginas
+Documentación a presentar: Código fuente del programa.
+4.2 Fase 2. Duración 1 semana
+En la segunda semana, se puede añadir la capacidad de ejecutar programas CGI al servidor realizado en la fase anterior, manteniéndolo aún como un servidor con un sólo proceso maestro (más el proceso hijo que ejecute los CGI). De esta forma, se aprenderá a crear nuevos procesos para ejecutar programas externos, a duplicar descriptores y redirigir la entrada/salida, y a manipular variables de entorno.
+A continuación se muestra un seudocódigo orientativo para la resolución de esta fase, resaltando en negrita las modificaciones con respecto al seudocódigo propuesto para la fase anterior:
+Procesar los parámetros de configuración
+Establecer las rutinas de tratamiento de las señales
+Crear gestorHTTP ( in puerto ) -> GestorHTTP
+Repetir
+Esperar conexión de cliente ( in gestorHTTP, out cliente )
+Leer petición ( in cliente, out petición )
+Si petición es CGI
+Procesar CGI ( in cliente, in petición )
+Si no
+Procesar documento estático ( in cliente, in petición )
+Fin si
+Destruir petición ( in petición )
+Cerrar conexión ( in cliente )
+Hasta final de programa
+Destruir gestorHTTP ( in GestorHTTP )
+Procesar_CGI ( in cliente, in petición ):
+Crear tubería_p-h /* enviar información del padre al hijo */
+Crear tubería_h-p /* enviar información del hijo al padre */
+Switch ( fork() )
+Case Padre:
+Si petición->cuerpo no es nulo
+Escribir cuerpo en tubería_p-h
+Fin si
+Cerrar tubería_p-h
+Enviar respuesta ( in cliente, in petición, in tubería_h-p)
+Esperar la terminación del programa CGI
+Case Hijo:
+Laboratorio de Sistemas Operativos Curso 2012/2013
+Práctica 3 – página 17 -
+Establecer variables de entorno
+Redirigir su entrada estándar a la tubería_p-h
+Redirigir su salida estándar a la tubería_h-p
+Ejecutar programa CGI
+Si llega aquí, enviar código de error a la salida estándar
+End Switch
+Para que las tuberías funcionen correctamente, tanto el proceso padre como el proceso hijo deben cerrar los extremos de las tuberías que no usan para nada. Esto no ha sido incluido en el seudocódigo anterior.
+Para probar esta fase se recomienda que el alumno abra los recursos de tipo CGI accesibles a partir del recurso basica.html del directorio páginas.
+Ilustración 5.- Resultado obtenido tras pulsar el enlace CGI básico en el recurso basica.htm
+Ilustración 6.- Resultado obtenido tras pulsar el enlace CGI que muestra las variables de entorno en el recurso basica.htm
+Documentación a presentar: Código fuente del programa.
+4.3 Fase 3. Duración 1 semana
+En la tercera semana, se convertirá el programa en un servidor multiproceso que satisfaga todos los requisitos básicos indicados en el apartado 3.2. En esencia, el servidor tendrá dos secuencias de
+Laboratorio de Sistemas Operativos Curso 2012/2013
+Práctica 3 – página 18 -
+ejecución diferentes: por un lado estará el código que ejecutan los procesos trabajadores, y que básicamente coincidirá con lo realizado en las fases anteriores (salvo que ya no se cerrará la conexión con el cliente tras procesar una sola petición), y por otro lado aparecerá como novedad la tarea de vigilancia de los trabajadores que hará el proceso maestro. Además, será necesario introducir una estructura de datos en memoria compartida que sirva para que los procesos trabajadores comuniquen su estado al proceso maestro. Cuando el maestro crea los trabajadores, los crea en el estado INACTIVO. Los trabajadores pasarán al estado ACTIVO cuando se establezca una conexión con un cliente, y volverán al estado INACTIVO cuando se cierre la conexión con el cliente. Cuando el maestro recibe la señal de terminación de los trabajadores y constata su finalización anota la entrada correspondiente de la tabla de trabajadores como NOUSADO.
+Esta fase podría extenderse parcialmente a la siguiente semana.
+A continuación se muestra un seudocódigo orientativo del programa principal, que crea los procesos trabajadores, y del proceso maestro:
+Procesar los parámetros de configuración
+Establecer las rutinas de tratamiento de las señales (además SIGCHLD)
+Crear gestorHTTP ( in puerto ) -> GestorHTTP
+Crear tabla de trabajadores en memoria compartida
+Marcar todas las posiciones de la tabla de trabajadores como NOUSADO
+Crear Pini trabajadores
+Repetir
+Sleep(1)
+Contar trabajadores inactivos /* en estado INACTIVO */
+Si cuenta > Pinact_max
+Enviar SIGTERM a (cuenta – Pinact_max) trabajadores inactivos
+Si no Si cuenta < Pinact_min
+Crear Pinact_min–cuenta trabajadores, respetando el límite Pmax
+Fin si
+Hasta final de programa
+Enviar a todos los trabajadores la señal de terminación
+Esperar a que todos los trabajadores hayan terminado su ejecución
+Destruir gestorHTTP ( in GestorHTTP )
+El seudocódigo orientativo para los trabajadores sería el presentado a continuación. Es análogo al ya desarrollado para la fase anterior, aunque se ha modificado para procesar más de una petición en una misma conexión y para actualizar el estado del trabajador en la tabla compartida con el proceso maestro. No se ha considerado el control de los errores que pueden generar las funciones del módulo http, para simplificar los algoritmos. En negrita se resaltan las novedades:
+Ajustar los manejadores de señal
+Repetir
+Esperar conexión de cliente ( in gestorHTTP, out cliente )
+Marcar mi posición en la tabla de trabajadores como ACTIVO
+Repetir
+Leer petición ( in cliente, out petición )
+Si petición es CGI
+Procesar_CGI(in cliente, in petición)
+Si no
+Procesar documento estático ( in cliente, in petición )
+Fin si
+Destruir petición ( in petición )
+Hasta que el cliente se desconecte o me ordenen morir
+Marcar mi posición en la tabla de trabajadores como INACTIVO
+Cerrar conexión ( in cliente )
+Hasta que me ordenen morir
+Laboratorio de Sistemas Operativos Curso 2012/2013
+Práctica 3 – página 19 -
+El ajuste de los manejadores de señal puede ser necesario porque el proceso trabajador heredará los ajustes del maestro y éstos podrían no ser los adecuados para el trabajador. En concreto:
+• El trabajador no tiene que procesar SIGINT, ya que eso lo hace el maestro.
+• La respuesta a SIGTERM también es diferente, ya que el maestro tiene que pedir a todos los trabajadores que terminen, mientras que el trabajador tiene que terminar su ejecución tras procesar la petición actual (si la hubiere). Ahora bien, el manejador de la señal en sí podría ser el mismo si lo único que hace es cambiar el valor de la variable de control del bucle principal del proceso.
+• El procesamiento de SIGCHLD también es diferente, puesto que en el maestro hay que marcar que el trabajador que ha terminado ya no existe, mientras que en el trabajador esta señal solo se recibe cuando termina un proceso hijo que se ha creado para ejecutar un CGI.
+Téngase en cuenta que, para indicar a un trabajador que debe finalizar su ejecución, el proceso padre le envía una señal SIGTERM. El trabajador, al recibirla, tomará nota de que debe terminar su ejecución cuando concluya el procesamiento de la petición actual.
+Además, hay que determinar cómo se actualiza la tabla de trabajadores para reflejar la creación y la terminación del proceso trabajador. El paso de NOUSADO a INACTIVO lo podría hacer el proceso trabajador cuando comienza su ejecución, pero eso puede generar condiciones de carrera con el maestro. Por tanto, es conveniente que el maestro lo marque como inactivo justo antes de crearlo.. El paso de INACTIVO a NOUSADO podría hacerlo el trabajador justo antes de terminar, o el proceso padre cuando recibe la señal SIGCHLD que le indica que un hijo ha terminado. Se recomienda que sea el maestro el que lo haga (así también se marcarían como no usadas las posiciones de los trabajadores que mueran abruptamente por cualquier motivo).
+El maestro necesita conocer el PID de los trabajadores para poder mandarles las señales de terminación. Hay que tener en cuenta posibles condiciones de carrera si un trabajador termina prematuramente (antes de que se haya anotado su PID). Si el maestro recibe la señal SIGCHLD de un trabajador y trata de localizar la entrada correspondiente de la tabla de trabajadores para marcarla como NOUSADO, podría no encontrarla (porque aún no se haya anotado su PID). Por tanto, habrá que garantizar que esto no ocurre. Una posibilidad es evitar que se procese la señal SIGCHLD hasta que el PID del nuevo trabajador haya sido anotado (usando sigprocmask(2)).
+Se recomienda que los trabajadores ignoren la señal de terminación de los procesos que ejectutan los programas CGI, sino que sincronicen directamente con ellos antes de pasar a atender una nueva petición. De esa forma, pueden detectar fallos en la ejecución de los CGI, para avisar al cliente en esos casos.
+Cuando el maestro se entera de que le ha llegado la señal SIGCHLD y pasa a ejecutar la rutina de atención correspondiente, puede ser que hayan terminado varios procesos hijos antes de que se ejecute su rutina de atención, por lo que deberá sincronizar con todos los hijos que estén pendientes de sincronizar, para evitar que se queden zombis, y para anotar correctamente su estado en la tabla.
+Obsérvese que en esta fase ya no hay problemas con los agentes de usuario que abren múltiples conexiones con el servidor simultáneamente, ya que el servidor es capaz de atender varias conexiones a la vez, usando, para ello, varios trabajadores en paralelo. NOTA: si el número máximo de procesos trabajadores es demasiado bajo (menos de 4), sí que podría haber problemas con esos agentes de usuario. Por ejemplo, podría verse que, al abrir un documento web con muchas imágenes en un navegador web, se cargan rápidamente algunas imágenes, mientras que otras tardan mucho más en cargarse.
+Laboratorio de Sistemas Operativos Curso 2012/2013
+Práctica 3 – página 20 -
+4.4 Fase 4. Duración 1 semana
+Esta fase final es opcional y se tendrá en cuenta para la calificación de la práctica. El alumno ha de escoger una o varias de las mejoras propuestas en el apartado 3.3 e implementarla en su servidor web. Se recomienda que haga una valoración previa de lo que cada una de ellas podría suponer, a fin de escoger la que le resulte más interesante y más conveniente de realizar. También se puede proponer al profesor alguna mejora no recogida en este documento.
+Documentación a presentar: Código fuente del programa junto con un documento que indique qué mejora opcional se ha realizado.
+Laboratorio de Sistemas Operativos Curso 2012/2013
+Práctica 3 – página 21 -
+Apéndice A : Introducción a las tecnologías web
+En su forma más sencilla, un servidor web es una aplicación que permite descargar recursos mediante el protocolo HTTP. La mayoría de esos recursos son documentos en formato HTML que describen la información a presentar al usuario final, por lo general estos documentos contienen referencias a otros tipos de recursos como imágenes, vídeo, hojas de estilo, documentos en lenguaje de script, documentos PDF, etc., que también se pueden descargar del servidor web. Por lo general, los documentos HTML en cuestión han sido generados de antemano mediante un programa de edición de páginas web, o son generados dinámicamente mediante un generador de contenidos u otro tipo de generación de contenidos dinámicos, y los recursos referenciados se han almacenado en algún directorio de la máquina donde se ejecuta el servidor web.
+Normalmente, los navegadores web descargan primero el documento que contiene la descripción de la página en HTML, lo interpretan y, si en él figuran referencias a otros recursos, entonces los descargan del servidor web. Finalmente, componen con todo ello la imagen que aparece en la pantalla del cliente. Como es bien sabido, en los documentos HTML también pueden aparecer referencias a otros recursos que no son descargados automáticamente sino que se encuentran accesibles a través de mecanismos de navegación (hiperenlaces o hipervínculos), estos mecanismo desencadenarán una petición en sobre el servidor si el usuario hace clic sobre el hiperenlace en cuestión.
+Por ejemplo, si un usuario utiliza un navegador web para solicitar un recurso con URL http://www.w3c.es/index.html, el navegador se conecta a la máquina www.w3.org y, mediante el protocolo HTTP, le pide el fichero /index.html. El servidor web comprueba si existe dicho documento en su directorio raíz y, en caso afirmativo, se lo transmite al cliente como respuesta a su petición. En caso negativo, envía un código de error.
+Si en el documento anterior figuran referencias a imágenes, por ejemplo a /img/2010/logo-w3c-mobile-lg, el navegador, seguidamente, pide al servidor web el documento correspondiente, para situarlo en la posición adecuada de la página.
+A veces, el servidor web procesa de manera especial algunas URL que no corresponden a ficheros existentes. Por ejemplo, si el cliente solicita abrir la URL http://www.w3c.es/Consorcio y resulta que Consorcio es un directorio y no un recurso, el servidor web entiende que el cliente está solicitando el posible fichero por defecto index.html que haya en ese directorio, es decir, /Consorcio/index.html.
+Lo que se ha explicado anteriormente corresponde a los denominados documentos estáticos. Existen URL que apuntan a lo que se denominan documentos dinámicos o CGI, es decir, no apuntan explícita o implícitamente a un documento existente, sino que hacen que el servidor ejecute un programa externo que genera, por su salida estándar, unos datos que han de llegar al cliente. Lógicamente el documento que genera se corresponde con un recurso, por lo que el cliente visualizará, reproducirá o descargará sin apreciar la diferencia de que éste ha sido creado por un programa. Como a cualquier programa, a un CGI se le pueden pasar argumentos para que personalice recurso generado. Por ejemplo, si un cliente abre la URL:
+http://www.diatel.upm.es/cgi-bin/calificaciones?dni=12345678A&asig=231, el servidor web ejecuta el programa calificaciones, pasándole un argumento de nombre dni y valor 12345678A y otro argumento de nombre asig y valor 23. Se supone que el programa hará algo con
+1 Esta URL es sólo un ejemplo, no se encuentra disponible.
+Laboratorio de Sistemas Operativos Curso 2012/2013
+Práctica 3 – página 22 -
+dichos argumentos (en este caso, quizá busque en una base de datos la calificación del alumno cuyo DNI es 12345678A en la asignatura cuyo código es el 23) y finalmente generará un documento con la información resultante en formato HTML, la cual se enviará como respuesta al cliente. Este documento dinámico podría hacer referencia a recursos gráficos, de audio, etc., los cuales descargaría el cliente en cuanto interpretara el documento HTML. Existen dos métodos alternativos de invocar a los programas CGI, llamados GET y POST.
+Existen otras muchas tecnologías que permiten generar recursos dinámicos, como PHP, JSP, ASP, .NET, JAVA, etc., que simplemente se mencionan a título informativo, ya que no se van a tener en cuenta en esta práctica.
+Los recursos dinámicos son muy útiles en combinación con los formularios. Un formulario es un elemento que puede aparecer en un documento HTML y que describe diversos elementos de entrada que el usuario puede completar, como cajas de texto, listas desplegables, botones de radio, etc. Así mismo, el formulario debe proporcionar algún elemento de acción (botón, imagen, etc.) que, al ser pulsado por el usuario, hace que el navegador envíe a una determinada URL del servidor los valores introducidos o seleccionados en el formulario como argumentos de la petición. Esa URL deberá ser un programa CGI, que recogerá los argumentos enviados para procesarlos y generar un recurso como respuesta al cliente.
+Por ejemplo, la URL:
+http://www.diatel.upm.es/cgi-bin/calificaciones?dni=12345678A&asig=23, usada como ejemplo anteriormente, podría haberse generado cuando el usuario ha pulsado el botón de enviar de un formulario que contenía una caja de texto llamada dni en la que había introducido la cadena 12345678A y una lista desplegable en la que había seleccionado la asignatura Sistemas operativos, cuyo código numérico resulta ser el 23.
+Los clientes web envían sus peticiones y reciben sus respuestas por medio del protocolo HTTP, cuya versión más reciente, HTTP/1.1, se encuentra especificada en la RFC 2616. A grandes rasgos, un cliente abre una conexión TCP con el servidor web y entonces entra en un bucle de envío de una petición (generalmente el método GET) y recepción de una respuesta. Este bucle se repite hasta que, bien el cliente, o bien el servidor, deciden cerrar la conexión. Obsérvese que, a través de una misma conexión, el cliente no envía una nueva petición hasta haber recibido la respuesta de la petición actual. Obsérvese, también, que un agente de usuario, podría crear varios clientes para abrir varias conexiones simultáneas con el servidor con el fin de hacer varias peticiones en paralelo.
+Laboratorio de Sistemas Operativos Curso 2012/2013
+Práctica 3 – página 23 -
+Apéndice B : Códigos de error
+En el protocolo HTTP, toda respuesta de un servidor web debe incluir un código de estado que indica el resultado de la solicitud HTTP del cliente, descritos en la RFC 2616 del protocolo HTTP. De manera resumida, el código puede ser de éxito (código 200) o de error (códigos 4XX y 5XX).
+El alumno no debe preocuparse de enviar el código de estado (código 200) en las peticiones satisfactorias, puesto que ya lo hace automáticamente la biblioteca de funciones suministrada. En cambio, cuando el servidor web del alumno detecte algún problema que impida responder satisfactoriamente a una petición, debe responderse con un código de estado apropiado usando la función http_enviar_codigo de la biblioteca de funciones suministrada.
+En este apéndice únicamente se tratarán los principales códigos de estado correspondientes a problemas que tiene el servidor web para atender una solicitud realizada por un cliente, y que son suficientes para realizar la práctica. Cuando se da esta situación, el servidor debe enviar al cliente un código de error numérico, un mensaje y, opcionalmente, una página web con información de la causa del error.
+Los códigos de error más comunes, junto con un posible mensaje explicativo son:
+• 400 Bad Request. El servidor web no pudo entender la solicitud debido a errores de sintaxis en la petición.
+• 403 Forbidden. El servidor entendió la solicitud pero no la va a atender. Un caso típico de este error sería cuando la URL solicitada corresponde a un directorio y no a un recurso, en ese directorio no se encuentra la página por defecto y el servidor no permite listar directorios. También puede deberse a que se ha solicitado un recurso para el que no se tienen permiso de lectura.
+• 404 Not Found. El servidor no ha encontrado el recurso correspondiente a la URL solicitada. Este error puede deberse a un error de ortografía o de sintaxis en la URL o que se trate de un recurso que ya no existe en el servidor.
+• 405 Method Not Allowed. El método especificado en la solicitud no se permite para el recurso solicitado. Este error ocurre por ejemplo cuando se hace una petición POST y el servidor web solamente permite peticiones GET para el tipo de archivo correspondiente a la URL solicitada.
+• 408 Request Timeout. Ocurrió un problema de comunicación de la red mientras el servidor gestionaba la solicitud.
+• 500 Internal error. Ocurrió un problema no especificado en el servidor, como falta de memoria, estructuras de datos corruptas, etc.
+Laboratorio de Sistemas Operativos Curso 2012/2013
+Práctica 3 – página 24 -
+Apéndice C : Principales páginas de manual de interés
+A continuación se enuncian algunas de las páginas de manual de FreeBSD más relevantes que el alumno tendrá que consultar para realizar la práctica. Para más información sobre ellas, consúltese la correspondiente página de manual y la información proporcionada en clase.
+Páginas de manual para las funciones obligatorias:
+• fork(2): crea un proceso nuevo.
+• exec(3): familia de funciones que permiten ejecutar programas.
+• exit(3): finaliza un proceso.
+• _exit(2): finaliza un proceso.
+• kill(2), killpg(2): envían una señal a un proceso o a un grupo de procesos.
+• signal(3): captura una señal.
+• sigaction(2): examinar y modificar las acciones a realizar al recibir una señal.
+• sigprocmask(2): examinar y modificar las señales bloqueadas.
+• sigsuspend(2): espera inactiva hasta que se reciba una señal.
+• sigemptyset(3), sigfillset(3), sigaddset(3), sigdelset(3), sigismember(3): funciones POSIX para manipular conjuntos de señales.
+• mmap(2): crea zonas de memoria virtual compartida.
+• open(2): abre un fichero.
+• read(2), write(2): lee o escribe en un descriptor de E/S.
+• close(2): cierra un descriptor de E/S.
+• pipe(2): crea una tubería.
+• dup(2), dup2(2): duplican un descriptor de E/S.
+• wait(2), waitpid(2), wait4(2), wait3(2): familia de llamadas al sistema para esperar y recoger información sobre los procesos hijos que han finalizado.
+• sleep(3): detiene un proceso durante el tiempo especificado.
+• getenv(3), setenv(3): permiten consultar y modificar variables de entorno.
+• getopt(3), getopt_long(3): analizan los argumentos de invocación de un programa.
+• errno(2): variable en la que las llamadas y funciones del sistema devuelven un código explicativo en caso de error.
+Páginas de manual para las mejoras:
+• getpriority(2), setpriority(2): obtienen o cambian la prioridad de un proceso.
+• getrusage(2): devuelve información sobre los recursos consumidos por un proceso.
+• select (2): permite que un proceso de usuario solicite al kernel la espera de algunos eventos determinados, reanudándose la ejecución de dicho proceso únicamente cuando se produzca alguno de ellos.
+• setitimer(2), alarm(3): pone en marcha un temporizador.
+• stat(2), fstat(2): obtienen información sobre los atributos de un fichero.
+La biblioteca de funciones que se proporciona ya codificada al alumno para gestionar las comunicaciones con los clientes también hace uso de otras llamadas al sistema como socket(2), bind(2), listen(2), accept(2), recv(2), send(2), setsockopt(2), fcntl(2) y shutdown(2), entre otras.
+Laboratorio de Sistemas Operativos Curso 2012/2013
